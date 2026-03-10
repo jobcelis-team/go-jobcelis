@@ -12,11 +12,15 @@ package jobcelis
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -142,15 +146,17 @@ type Webhook struct {
 	Topics      []string               `json:"topics"`
 	Headers     map[string]string      `json:"headers,omitempty"`
 	RetryConfig map[string]interface{} `json:"retry_config,omitempty"`
+	RateLimit   map[string]interface{} `json:"rate_limit,omitempty"`
 	InsertedAt  string                 `json:"inserted_at"`
 }
 
 // WebhookRequest is the request body for creating or updating a webhook.
 type WebhookRequest struct {
-	URL     string            `json:"url"`
-	Secret  string            `json:"secret,omitempty"`
-	Topics  []string          `json:"topics,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
+	URL       string                 `json:"url"`
+	Secret    string                 `json:"secret,omitempty"`
+	Topics    []string               `json:"topics,omitempty"`
+	Headers   map[string]string      `json:"headers,omitempty"`
+	RateLimit map[string]interface{} `json:"rate_limit,omitempty"`
 }
 
 // BatchRequest is the request body for sending multiple events.
@@ -358,11 +364,42 @@ type Member struct {
 	Role  string `json:"role"`
 }
 
+// NotificationChannel represents external notification channel config for a project.
+type NotificationChannel struct {
+	ID                 string   `json:"id"`
+	ProjectID          string   `json:"project_id"`
+	EmailEnabled       bool     `json:"email_enabled"`
+	EmailAddress       *string  `json:"email_address,omitempty"`
+	SlackEnabled       bool     `json:"slack_enabled"`
+	SlackWebhookURL    *string  `json:"slack_webhook_url,omitempty"`
+	DiscordEnabled     bool     `json:"discord_enabled"`
+	DiscordWebhookURL  *string  `json:"discord_webhook_url,omitempty"`
+	MetaWebhookEnabled bool     `json:"meta_webhook_enabled"`
+	MetaWebhookURL     *string  `json:"meta_webhook_url,omitempty"`
+	MetaWebhookSecret  *string  `json:"meta_webhook_secret,omitempty"`
+	EventTypes         []string `json:"event_types,omitempty"`
+	InsertedAt         string   `json:"inserted_at"`
+	UpdatedAt          string   `json:"updated_at"`
+}
+
 // Consent represents a GDPR consent record.
 type Consent struct {
 	Purpose   string `json:"purpose"`
 	Accepted  bool   `json:"accepted"`
 	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+// EmbedToken represents an embed token for client-side integrations.
+type EmbedToken struct {
+	ID             string                 `json:"id"`
+	Prefix         string                 `json:"prefix"`
+	Name           string                 `json:"name"`
+	Status         string                 `json:"status"`
+	Scopes         []string               `json:"scopes"`
+	AllowedOrigins []string               `json:"allowed_origins"`
+	Metadata       map[string]interface{} `json:"metadata"`
+	ExpiresAt      *string                `json:"expires_at"`
+	InsertedAt     string                 `json:"inserted_at"`
 }
 
 // PaginatedResponse wraps paginated API responses.
@@ -462,6 +499,13 @@ func (c *Client) DeleteWebhook(ctx context.Context, id string) error {
 func (c *Client) WebhookHealth(ctx context.Context, id string) (map[string]interface{}, error) {
 	var resp map[string]interface{}
 	err := c.doRequest(ctx, http.MethodGet, "/api/v1/webhooks/"+id+"/health", nil, &resp)
+	return resp, err
+}
+
+// TestWebhook sends a test delivery to a webhook.
+func (c *Client) TestWebhook(ctx context.Context, id string) (map[string]interface{}, error) {
+	var resp map[string]interface{}
+	err := c.doRequest(ctx, http.MethodPost, "/api/v1/webhooks/"+id+"/test", nil, &resp)
 	return resp, err
 }
 
@@ -918,6 +962,36 @@ func (c *Client) SimulateEvent(ctx context.Context, topic string, payload map[st
 	return resp, err
 }
 
+// ---------- Notification Channels ----------
+
+// GetNotificationChannel retrieves the notification channel config for the current project.
+func (c *Client) GetNotificationChannel(ctx context.Context) (*NotificationChannel, error) {
+	var resp struct {
+		Data *NotificationChannel `json:"data"`
+	}
+	err := c.doRequest(ctx, http.MethodGet, "/api/v1/notification-channels", nil, &resp)
+	return resp.Data, err
+}
+
+// UpsertNotificationChannel creates or updates the notification channel config.
+func (c *Client) UpsertNotificationChannel(ctx context.Context, config map[string]interface{}) (*NotificationChannel, error) {
+	var resp struct {
+		Data NotificationChannel `json:"data"`
+	}
+	err := c.doRequest(ctx, http.MethodPut, "/api/v1/notification-channels", config, &resp)
+	return &resp.Data, err
+}
+
+// DeleteNotificationChannel removes the notification channel config.
+func (c *Client) DeleteNotificationChannel(ctx context.Context) error {
+	return c.doRequest(ctx, http.MethodDelete, "/api/v1/notification-channels", nil, nil)
+}
+
+// TestNotificationChannel sends a test notification to all enabled channels.
+func (c *Client) TestNotificationChannel(ctx context.Context) error {
+	return c.doRequest(ctx, http.MethodPost, "/api/v1/notification-channels/test", nil, nil)
+}
+
 // ---------- GDPR (requires Bearer token) ----------
 
 // GetConsents retrieves the current user's consent records.
@@ -1065,6 +1139,75 @@ func (c *Client) VerifyMFA(ctx context.Context, mfaToken, code string) (*AuthTok
 	return &resp, err
 }
 
+// ---------- Embed Tokens ----------
+
+// ListEmbedTokens lists all embed tokens for the current project.
+func (c *Client) ListEmbedTokens(ctx context.Context) ([]EmbedToken, error) {
+	var resp struct {
+		Data []EmbedToken `json:"data"`
+	}
+	err := c.doRequest(ctx, http.MethodGet, "/api/v1/embed/tokens", nil, &resp)
+	return resp.Data, err
+}
+
+// CreateEmbedToken creates a new embed token.
+// Returns the raw response including the "token" field (only available at creation time).
+func (c *Client) CreateEmbedToken(ctx context.Context, config map[string]interface{}) (map[string]interface{}, error) {
+	var resp map[string]interface{}
+	err := c.doRequest(ctx, http.MethodPost, "/api/v1/embed/tokens", config, &resp)
+	return resp, err
+}
+
+// RevokeEmbedToken revokes an embed token by ID.
+func (c *Client) RevokeEmbedToken(ctx context.Context, id string) error {
+	return c.doRequest(ctx, http.MethodDelete, "/api/v1/embed/tokens/"+id, nil, nil)
+}
+
+// ---------- Retention & Purge ----------
+
+// RetentionPolicy represents the data retention policy.
+type RetentionPolicy struct {
+	EventsDays    int `json:"events_days,omitempty"`
+	DeliveriesDays int `json:"deliveries_days,omitempty"`
+	AuditLogsDays int `json:"audit_logs_days,omitempty"`
+}
+
+// PurgeRequest represents the parameters for a purge operation.
+type PurgeRequest struct {
+	Type     string `json:"type"`
+	OlderThan string `json:"older_than,omitempty"`
+	Topic    string `json:"topic,omitempty"`
+	Status   string `json:"status,omitempty"`
+}
+
+// GetRetentionPolicy retrieves the current retention policy.
+func (c *Client) GetRetentionPolicy(ctx context.Context) (map[string]interface{}, error) {
+	var resp map[string]interface{}
+	err := c.doRequest(ctx, http.MethodGet, "/api/v1/retention", nil, &resp)
+	return resp, err
+}
+
+// UpdateRetentionPolicy updates the retention policy.
+func (c *Client) UpdateRetentionPolicy(ctx context.Context, policy RetentionPolicy) (map[string]interface{}, error) {
+	var resp map[string]interface{}
+	err := c.doRequest(ctx, http.MethodPatch, "/api/v1/retention", policy, &resp)
+	return resp, err
+}
+
+// PreviewPurge previews a purge operation without executing it.
+func (c *Client) PreviewPurge(ctx context.Context, req PurgeRequest) (map[string]interface{}, error) {
+	var resp map[string]interface{}
+	err := c.doRequest(ctx, http.MethodPost, "/api/v1/purge/preview", req, &resp)
+	return resp, err
+}
+
+// PurgeData executes a purge operation.
+func (c *Client) PurgeData(ctx context.Context, req PurgeRequest) (map[string]interface{}, error) {
+	var resp map[string]interface{}
+	err := c.doRequest(ctx, http.MethodPost, "/api/v1/purge", req, &resp)
+	return resp, err
+}
+
 // ---------- Health ----------
 
 // Health checks the platform health.
@@ -1072,6 +1215,37 @@ func (c *Client) Health(ctx context.Context) (map[string]interface{}, error) {
 	var resp map[string]interface{}
 	err := c.doRequest(ctx, http.MethodGet, "/health", nil, &resp)
 	return resp, err
+}
+
+// ---------- Webhook Signature Verification ----------
+
+// VerifyWebhookSignature verifies a webhook signature from Jobcelis.
+//
+// The Jobcelis backend signs webhook payloads with HMAC-SHA256, Base64-encoded
+// without padding, and sends the signature in the x-signature header with the
+// format "sha256=<base64_no_padding>".
+//
+// Parameters:
+//   - secret: the webhook signing secret
+//   - body: the raw request body
+//   - signature: the full X-Signature header value (e.g. "sha256=abc123...")
+func VerifyWebhookSignature(secret, body, signature string) bool {
+	if secret == "" || body == "" || signature == "" {
+		return false
+	}
+
+	const prefix = "sha256="
+	if !strings.HasPrefix(signature, prefix) {
+		return false
+	}
+
+	receivedSig := signature[len(prefix):]
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(body))
+	expectedSig := base64.RawStdEncoding.EncodeToString(mac.Sum(nil))
+
+	return hmac.Equal([]byte(expectedSig), []byte(receivedSig))
 }
 
 // ---------- Internal ----------
