@@ -7,7 +7,7 @@ Covers 100% of the Jobcelis REST API: events, webhooks, deliveries, dead letters
 ## Installation
 
 ```bash
-go get github.com/vladimirCeli/go-jobcelis
+go get github.com/jobcelis-team/go-jobcelis
 ```
 
 ## Quick Start
@@ -20,7 +20,7 @@ import (
     "fmt"
     "log"
 
-    jobcelis "github.com/vladimirCeli/go-jobcelis"
+    jobcelis "github.com/jobcelis-team/go-jobcelis"
 )
 
 func main() {
