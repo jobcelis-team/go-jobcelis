@@ -1,0 +1,70 @@
+# Publishes automatically when the version below changes on main:
+#   1. reads the version from VERSION
+#   2. if the repo does not have it yet, builds and tests it
+#   3. tags the commit (vX.Y.Z)
+# Bump the version in VERSION to release; any other change publishes nothing.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: v
+        run: |
+          VERSION=$(tr -d "[:space:]" < VERSION)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Already released?
+        id: check
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${{ steps.v.outputs.tag }}" >/dev/null; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "${{ steps.v.outputs.tag }} is already tagged: nothing to do"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-go@v5
+        if: steps.check.outputs.release == 'true'
+        with:
+          go-version: "1.22"
+
+      - name: Build and test
+        if: steps.check.outputs.release == 'true'
+        run: go vet ./... && go test ./...
+
+      - name: Make the version available on pkg.go.dev
+        if: steps.check.outputs.release == 'true'
+        run: curl -sf "https://proxy.golang.org/github.com/vladimir!celi/go-jobcelis/@v/v${{ steps.v.outputs.version }}.info" || true
+
+      - name: Tag the release
+        if: steps.check.outputs.release == 'true'
+        run: |
+          TAG="${{ steps.v.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "$TAG"
+            git push origin "$TAG"
+          fi
