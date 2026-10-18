@@ -1,0 +1,23 @@
+# Builds and checks every pull request (Dependabot's too) the same way Release
+# does before publishing, so a change that would break the release fails here.
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Vet and test
+        run: go vet ./... && go test ./...
