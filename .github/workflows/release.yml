@@ -1,8 +1,11 @@
-# Publishes automatically when the version below changes on main:
-#   1. reads the version from VERSION
-#   2. if the repo does not have it yet, builds and tests it
-#   3. tags the commit (vX.Y.Z)
-# Bump the version in VERSION to release; any other change publishes nothing.
+# Publishes automatically on every push to main that changes the package:
+#   1. next-version (jobcelis-team/.github) picks the version: the last release
+#      plus a patch, or the version in VERSION when it was raised by hand.
+#      Docs, tests, CI and repo config release nothing.
+#   2. writes it into VERSION and commits it locally
+#   3. builds and tests it; the tag is the release (pkg.go.dev)
+#   4. pushes the version commit and tags vX.Y.Z
+# To release a minor or major version, raise it in VERSION.
 name: Release
 
 on:
@@ -26,45 +29,47 @@ jobs:
           fetch-depth: 0
 
       - name: Read version
-        id: v
+        id: current
         run: |
           VERSION=$(tr -d "[:space:]" < VERSION)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
 
-      - name: Already released?
-        id: check
+      - name: Next version
+        id: v
+        uses: jobcelis-team/.github/actions/next-version@main
+        with:
+          current: ${{ steps.current.outputs.version }}
+          tag-prefix: "v"
+
+      - name: Write the version
+        if: steps.v.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
         run: |
-          if git ls-remote --exit-code --tags origin "refs/tags/${{ steps.v.outputs.tag }}" >/dev/null; then
-            echo "release=false" >> "$GITHUB_OUTPUT"
-            echo "${{ steps.v.outputs.tag }} is already tagged: nothing to do"
-          else
-            echo "release=true" >> "$GITHUB_OUTPUT"
-          fi
+          echo "$VERSION" > VERSION
+
+      - name: Commit the version
+        if: steps.v.outputs.release == 'true'
+        uses: jobcelis-team/.github/actions/commit-version@main
+        with:
+          version: ${{ steps.v.outputs.version }}
 
       - uses: actions/setup-go@v7
-        if: steps.check.outputs.release == 'true'
+        if: steps.v.outputs.release == 'true'
         with:
           go-version: "1.22"
 
       - name: Build and test
-        if: steps.check.outputs.release == 'true'
+        if: steps.v.outputs.release == 'true'
         run: go vet ./... && go test ./...
 
-      - name: Make the version available on pkg.go.dev
-        if: steps.check.outputs.release == 'true'
-        run: curl -sf "https://proxy.golang.org/github.com/vladimir!celi/go-jobcelis/@v/v${{ steps.v.outputs.version }}.info" || true
+      - name: Push the version and tag the release
+        if: steps.v.outputs.release == 'true'
+        uses: jobcelis-team/.github/actions/push-release@main
+        with:
+          tag: ${{ steps.v.outputs.tag }}
 
-      - name: Tag the release
-        if: steps.check.outputs.release == 'true'
-        run: |
-          TAG="${{ steps.v.outputs.tag }}"
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
-            echo "Tag $TAG already exists"
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG" -m "$TAG"
-            git push origin "$TAG"
-          fi
+      - name: Make the version available on pkg.go.dev
+        if: steps.v.outputs.release == 'true'
+        run: curl -sf "https://proxy.golang.org/github.com/vladimir!celi/go-jobcelis/@v/v${{ steps.v.outputs.version }}.info" || true
