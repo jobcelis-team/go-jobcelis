@@ -1,3 +1,3 @@
-module github.com/vladimirCeli/go-jobcelis
+module github.com/jobcelis-team/go-jobcelis
 
 go 1.21

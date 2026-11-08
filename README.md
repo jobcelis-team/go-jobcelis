@@ -7,8 +7,12 @@ Covers 100% of the Jobcelis REST API: events, webhooks, deliveries, dead letters
 ## Installation
 
 ```bash
-go get github.com/vladimirCeli/go-jobcelis
+go get github.com/jobcelis-team/go-jobcelis
 ```
+
+> Versions up to v1.4.x were published as `github.com/vladimirCeli/go-jobcelis`.
+> They keep working, but new releases use the module path above: replace the
+> import path and run `go get github.com/jobcelis-team/go-jobcelis@latest`.
 
 ## Quick Start
 
@@ -20,7 +24,7 @@ import (
     "fmt"
     "log"
 
-    jobcelis "github.com/vladimirCeli/go-jobcelis"
+    jobcelis "github.com/jobcelis-team/go-jobcelis"
 )
 
 func main() {
