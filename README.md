@@ -55,7 +55,26 @@ client := jobcelis.NewClient("key").WithBaseURL("https://your-instance.example.c
 
 // Custom timeout
 client := jobcelis.NewClient("key").WithTimeout(10 * time.Second)
+
+// Retry failed requests up to 3 times instead of 6 (0 disables retries)
+client := jobcelis.NewClient("key").WithMaxRetries(3)
 ```
+
+## Retries
+
+The client retries failed requests automatically, so a short outage (for example while the API is being deployed) does not lose your events:
+
+- **What is retried:** network errors (connection refused or reset, DNS, TLS, timeouts) and HTTP `429`, `502`, `503` and `504`. Other errors (`400`, `401`, `404`, `422`, `500`, ...) are returned right away.
+- **POST requests** are retried on `429`/`502`/`503`/`504`, but after a network error only when they carry an idempotency key, because the server may already have processed them.
+- **Events are safe to retry:** `SendEvent` sends an `X-Idempotency-Key` header (your `IdempotencyKey`, or a random UUID) that stays the same on every retry, and `SendEvents` gives every event without an `IdempotencyKey` a random one. A retried call never creates an event twice.
+- **Backoff:** 1s, 2s, 4s, 8s, 16s, then 30s (±20% jitter), or the server's `Retry-After` header (up to 60s). The default of 6 retries covers about 60 seconds. Cancelling the `context` stops the retries.
+
+```go
+client := jobcelis.NewClient("key").WithMaxRetries(3) // fewer retries
+client := jobcelis.NewClient("key").WithMaxRetries(0) // no retries
+```
+
+When the last retry fails, the error is the same one a single attempt returns (`*jobcelis.APIError` or a network error).
 
 ## Authentication
 

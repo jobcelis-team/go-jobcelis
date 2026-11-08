@@ -35,6 +35,15 @@ type Client struct {
 	AuthToken  string
 	BaseURL    string
 	HTTPClient *http.Client
+
+	// MaxRetries is how many times a failed request is retried (network
+	// errors and HTTP 429, 502, 503 and 504). NewClient sets it to
+	// DefaultMaxRetries; 0 disables retries.
+	MaxRetries int
+
+	// retryBaseDelay is the first backoff delay (1s when zero). Tests
+	// lower it so they do not sleep for real seconds.
+	retryBaseDelay time.Duration
 }
 
 // NewClient creates a new Jobcelis client with the given API key.
@@ -45,6 +54,7 @@ func NewClient(apiKey string) *Client {
 		HTTPClient: &http.Client{
 			Timeout: DefaultTimeout,
 		},
+		MaxRetries: DefaultMaxRetries,
 	}
 }
 
@@ -425,14 +435,38 @@ func (e *APIError) Error() string {
 // ---------- Events ----------
 
 // SendEvent sends a single event.
+//
+// The request carries an X-Idempotency-Key header (req.IdempotencyKey, or a
+// random UUID when it is empty) that stays the same on every retry, so a
+// retried call never creates the event twice.
 func (c *Client) SendEvent(ctx context.Context, req EventRequest) (*EventResponse, error) {
+	key := req.IdempotencyKey
+	if key == "" {
+		key = newIdempotencyKey()
+	}
+	header := http.Header{}
+	header.Set(idempotencyKeyHeader, key)
+
 	var resp EventResponse
-	err := c.doRequest(ctx, http.MethodPost, "/api/v1/events", req, &resp)
+	err := c.doRequestWithHeaders(ctx, http.MethodPost, "/api/v1/events", req, &resp, "apikey", header)
 	return &resp, err
 }
 
 // SendEvents sends a batch of events.
+//
+// Every event without an IdempotencyKey is sent with a random UUID as its
+// idempotency_key, so a retried call never creates an event twice. The
+// caller's request is not modified.
 func (c *Client) SendEvents(ctx context.Context, req BatchRequest) (*BatchResult, error) {
+	events := make([]EventRequest, len(req.Events))
+	copy(events, req.Events)
+	for i := range events {
+		if events[i].IdempotencyKey == "" {
+			events[i].IdempotencyKey = newIdempotencyKey()
+		}
+	}
+	req.Events = events
+
 	var resp BatchResult
 	err := c.doRequest(ctx, http.MethodPost, "/api/v1/events/batch", req, &resp)
 	return &resp, err
@@ -1280,46 +1314,34 @@ func (c *Client) doPublicRequest(ctx context.Context, method, path string, body 
 }
 
 func (c *Client) doRequestWithAuth(ctx context.Context, method, path string, body interface{}, result interface{}, authMode string) error {
-	var reqBody io.Reader
+	return c.doRequestWithHeaders(ctx, method, path, body, result, authMode, nil)
+}
+
+func (c *Client) doRequestWithHeaders(ctx context.Context, method, path string, body interface{}, result interface{}, authMode string, extra http.Header) error {
+	var data []byte
 	if body != nil {
-		data, err := json.Marshal(body)
+		var err error
+		data, err = json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("jobcelis: failed to marshal request: %w", err)
 		}
-		reqBody = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reqBody)
-	if err != nil {
-		return fmt.Errorf("jobcelis: failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
+	header := http.Header{}
+	header.Set("Content-Type", "application/json")
 	switch authMode {
 	case "apikey":
-		req.Header.Set("X-Api-Key", c.APIKey)
+		header.Set("X-Api-Key", c.APIKey)
 	case "bearer":
-		req.Header.Set("Authorization", "Bearer "+c.AuthToken)
+		header.Set("Authorization", "Bearer "+c.AuthToken)
+	}
+	for k, v := range extra {
+		header[k] = v
 	}
 
-	resp, err := c.HTTPClient.Do(req)
+	respBody, err := c.send(ctx, method, path, data, header)
 	if err != nil {
-		return fmt.Errorf("jobcelis: request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("jobcelis: failed to read response: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		apiErr := &APIError{StatusCode: resp.StatusCode}
-		_ = json.Unmarshal(respBody, apiErr)
-		if apiErr.Message == "" {
-			apiErr.Message = string(respBody)
-		}
-		return apiErr
+		return err
 	}
 
 	if result != nil && len(respBody) > 0 {
@@ -1332,22 +1354,72 @@ func (c *Client) doRequestWithAuth(ctx context.Context, method, path string, bod
 }
 
 func (c *Client) doRequestRaw(ctx context.Context, method, path string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("jobcelis: failed to create request: %w", err)
+	header := http.Header{}
+	header.Set("X-Api-Key", c.APIKey)
+	return c.send(ctx, method, path, nil, header)
+}
+
+// send performs the request and returns the response body, retrying network
+// errors and HTTP 429, 502, 503 and 504 up to c.MaxRetries times. POST
+// requests are retried after a network error only when they carry an
+// idempotency key, because the server may already have processed them.
+func (c *Client) send(ctx context.Context, method, path string, data []byte, header http.Header) ([]byte, error) {
+	idempotent := isIdempotent(method, header)
+
+	for attempt := 0; ; attempt++ {
+		canRetry := attempt < c.MaxRetries
+
+		respBody, resp, err, networkErr := c.sendOnce(ctx, method, path, data, header)
+		if err == nil {
+			return respBody, nil
+		}
+
+		retryable := false
+		switch {
+		case ctx.Err() != nil:
+			// The caller cancelled or the deadline passed: stop now.
+		case networkErr:
+			// Connect, DNS, TLS, timeout or reading the body failed.
+			retryable = idempotent
+		case resp != nil:
+			retryable = isRetryableStatus(resp.StatusCode)
+		}
+		if !retryable || !canRetry {
+			return nil, err
+		}
+
+		if sleepErr := sleepContext(ctx, c.retryDelay(attempt+1, resp)); sleepErr != nil {
+			return nil, err
+		}
+	}
+}
+
+// sendOnce makes a single attempt. It returns the response (when one was
+// received) so the caller can read Retry-After, and whether the error was a
+// network error.
+func (c *Client) sendOnce(ctx context.Context, method, path string, data []byte, header http.Header) ([]byte, *http.Response, error, bool) {
+	var reqBody io.Reader
+	if data != nil {
+		reqBody = bytes.NewReader(data)
 	}
 
-	req.Header.Set("X-Api-Key", c.APIKey)
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reqBody)
+	if err != nil {
+		return nil, nil, fmt.Errorf("jobcelis: failed to create request: %w", err), false
+	}
+	for k, v := range header {
+		req.Header[k] = v
+	}
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("jobcelis: request failed: %w", err)
+		return nil, nil, fmt.Errorf("jobcelis: request failed: %w", err), true
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("jobcelis: failed to read response: %w", err)
+		return nil, nil, fmt.Errorf("jobcelis: failed to read response: %w", err), true
 	}
 
 	if resp.StatusCode >= 400 {
@@ -1356,8 +1428,8 @@ func (c *Client) doRequestRaw(ctx context.Context, method, path string) ([]byte,
 		if apiErr.Message == "" {
 			apiErr.Message = string(respBody)
 		}
-		return nil, apiErr
+		return nil, resp, apiErr, false
 	}
 
-	return respBody, nil
+	return respBody, resp, nil, false
 }
