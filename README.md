@@ -2,7 +2,7 @@
 
 Go client for the [Jobcelis](https://jobcelis.com) Event Infrastructure Platform.
 
-Covers 100% of the Jobcelis REST API: events, webhooks, deliveries, dead letters, replays, jobs, pipelines, event schemas, sandbox, analytics, project management, teams, invitations, audit logs, exports, simulation, GDPR, auth, and health.
+Covers the Jobcelis REST API used from a backend: events, webhooks, deliveries, dead letters, replays, jobs, pipelines, event schemas, sandbox, analytics, project management, teams, invitations, audit logs, exports, simulation, GDPR, auth, and health. Not covered: the embed portal endpoints (`/api/v1/embed/...` called with an embed token) and the `/stream` server-sent events endpoint.
 
 ## Installation
 
@@ -318,9 +318,9 @@ ctx := context.Background()
 // Create a scheduled job
 job, err := client.CreateJob(ctx, jobcelis.JobRequest{
     Name:           "Daily digest",
-    Queue:          "scheduled_job",
     CronExpression: "0 9 * * *",
-    Topics:         []string{"order.created"},
+    Topic:          "digest.daily",
+    Payload:        map[string]interface{}{"kind": "daily"},
 })
 fmt.Printf("Job ID: %s\n", job.ID)
 
@@ -336,9 +336,7 @@ job, err = client.GetJob(ctx, "job-id")
 // Update a job
 updated, err := client.UpdateJob(ctx, "job-id", jobcelis.JobRequest{
     Name:           "Weekly digest",
-    Queue:          "scheduled_job",
     CronExpression: "0 9 * * 1",
-    Topics:         []string{"order.created"},
 })
 
 // Delete a job
@@ -362,9 +360,11 @@ for _, t := range times {
 ```go
 ctx := context.Background()
 
-// Create a pipeline
+// Create a pipeline (WebhookID is required: the pipeline delivers to that webhook)
+webhookID := "webhook-id"
 pipeline, err := client.CreatePipeline(ctx, jobcelis.PipelineRequest{
     Name:        "Order processing",
+    WebhookID:   &webhookID,
     Description: "Process order events through multiple stages",
     Topics:      []string{"order.created"},
     Steps: []map[string]interface{}{
@@ -410,7 +410,7 @@ ctx := context.Background()
 // Create a schema
 schema, err := client.CreateEventSchema(ctx, jobcelis.EventSchemaRequest{
     Topic:   "order.created",
-    Version: "1.0",
+    Version: 1,
     Schema: map[string]interface{}{
         "type": "object",
         "properties": map[string]interface{}{
@@ -425,7 +425,7 @@ fmt.Printf("Schema ID: %s\n", schema.ID)
 // List schemas
 schemas, err := client.ListEventSchemas(ctx, nil)
 for _, s := range schemas.Data {
-    fmt.Printf("%s: %s v%s\n", s.ID, s.Topic, s.Version)
+    fmt.Printf("%s: %s v%d\n", s.ID, s.Topic, s.Version)
 }
 
 // Get schema by ID
@@ -434,7 +434,7 @@ schema, err = client.GetEventSchema(ctx, "schema-id")
 // Update a schema
 updated, err := client.UpdateEventSchema(ctx, "schema-id", jobcelis.EventSchemaRequest{
     Topic:   "order.created",
-    Version: "1.1",
+    Version: 2,
     Schema:  map[string]interface{}{"type": "object"},
 })
 
@@ -715,7 +715,7 @@ data, err := client.ExportMyData(ctx)
 fmt.Printf("My data: %v\n", data)
 
 // Restrict processing (Article 18)
-err = client.RestrictProcessing(ctx)
+err = client.RestrictProcessing(ctx, "account-password")
 
 // Lift restriction
 err = client.LiftRestriction(ctx)
@@ -849,7 +849,7 @@ if err != nil {
 | **GDPR** | `GetConsents(ctx)` | Bearer | Get consent records |
 | | `AcceptConsent(ctx, purpose)` | Bearer | Accept a consent |
 | | `ExportMyData(ctx)` | Bearer | Export personal data |
-| | `RestrictProcessing(ctx)` | Bearer | Restrict processing |
+| | `RestrictProcessing(ctx, password)` | Bearer | Restrict processing |
 | | `LiftRestriction(ctx)` | Bearer | Lift restriction |
 | | `ObjectToProcessing(ctx)` | Bearer | Object to processing |
 | | `RestoreConsent(ctx)` | Bearer | Withdraw objection |

@@ -164,8 +164,9 @@ type Webhook struct {
 }
 
 // WebhookRequest is the request body for creating or updating a webhook.
+// Empty fields are not sent, so UpdateWebhook changes only what is set.
 type WebhookRequest struct {
-	URL       string                 `json:"url"`
+	URL       string                 `json:"url,omitempty"`
 	Secret    string                 `json:"secret,omitempty"`
 	Topics    []string               `json:"topics,omitempty"`
 	Headers   map[string]string      `json:"headers,omitempty"`
@@ -190,20 +191,20 @@ type BatchResult struct {
 
 // Delivery represents a delivery attempt.
 type Delivery struct {
-	ID                string             `json:"id"`
-	EventID           string             `json:"event_id"`
-	WebhookID         string             `json:"webhook_id"`
-	Status            string             `json:"status"`
-	AttemptNumber     int                `json:"attempt_number"`
-	ResponseStatus    *int               `json:"response_status,omitempty"`
-	ResponseBody      *string            `json:"response_body,omitempty"`
-	ResponseHeaders   map[string]string  `json:"response_headers,omitempty"`
-	ResponseLatencyMs *int               `json:"response_latency_ms,omitempty"`
-	RequestHeaders    map[string]string  `json:"request_headers,omitempty"`
-	RequestBody       *string            `json:"request_body,omitempty"`
-	DestinationIP     *string            `json:"destination_ip,omitempty"`
-	NextRetryAt       *string            `json:"next_retry_at,omitempty"`
-	InsertedAt        string             `json:"inserted_at"`
+	ID                string            `json:"id"`
+	EventID           string            `json:"event_id"`
+	WebhookID         string            `json:"webhook_id"`
+	Status            string            `json:"status"`
+	AttemptNumber     int               `json:"attempt_number"`
+	ResponseStatus    *int              `json:"response_status,omitempty"`
+	ResponseBody      *string           `json:"response_body,omitempty"`
+	ResponseHeaders   map[string]string `json:"response_headers,omitempty"`
+	ResponseLatencyMs *int              `json:"response_latency_ms,omitempty"`
+	RequestHeaders    map[string]string `json:"request_headers,omitempty"`
+	RequestBody       *string           `json:"request_body,omitempty"`
+	DestinationIP     *string           `json:"destination_ip,omitempty"`
+	NextRetryAt       *string           `json:"next_retry_at,omitempty"`
+	InsertedAt        string            `json:"inserted_at"`
 }
 
 // DeadLetter represents a dead-lettered event.
@@ -239,23 +240,54 @@ type ReplayRequest struct {
 
 // Job represents a scheduled job.
 type Job struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	Status         string   `json:"status"`
-	Queue          string   `json:"queue"`
-	CronExpression string   `json:"cron_expression"`
-	Topics         []string `json:"topics"`
-	WebhookID      *string  `json:"webhook_id,omitempty"`
-	InsertedAt     string   `json:"inserted_at"`
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	Status         string                 `json:"status"`
+	ScheduleType   string                 `json:"schedule_type,omitempty"`
+	ScheduleConfig map[string]interface{} `json:"schedule_config,omitempty"`
+	ActionType     string                 `json:"action_type,omitempty"`
+	ActionConfig   map[string]interface{} `json:"action_config,omitempty"`
+	Queue          string                 `json:"queue"`
+	CronExpression string                 `json:"cron_expression"`
+	Topics         []string               `json:"topics"`
+	WebhookID      *string                `json:"webhook_id,omitempty"`
+	InsertedAt     string                 `json:"inserted_at"`
 }
 
 // JobRequest is the request body for creating or updating a job.
+//
+// Describe the schedule with CronExpression (a cron expression or "daily",
+// "weekly", "monthly") and the action with Topic and Payload (emit an event) or
+// URL, Method and Payload (call a URL). The canonical ScheduleType,
+// ScheduleConfig, ActionType and ActionConfig fields win when set. Empty fields
+// are not sent, so UpdateJob changes only what is set.
 type JobRequest struct {
-	Name           string   `json:"name"`
-	Queue          string   `json:"queue"`
-	CronExpression string   `json:"cron_expression"`
-	Topics         []string `json:"topics"`
-	WebhookID      *string  `json:"webhook_id,omitempty"`
+	Name           string                 `json:"name,omitempty"`
+	Queue          string                 `json:"queue,omitempty"`
+	CronExpression string                 `json:"cron_expression,omitempty"`
+	Topic          string                 `json:"topic,omitempty"`
+	Payload        map[string]interface{} `json:"payload,omitempty"`
+	URL            string                 `json:"url,omitempty"`
+	Method         string                 `json:"method,omitempty"`
+	ScheduleType   string                 `json:"schedule_type,omitempty"`
+	ScheduleConfig map[string]interface{} `json:"schedule_config,omitempty"`
+	ActionType     string                 `json:"action_type,omitempty"`
+	ActionConfig   map[string]interface{} `json:"action_config,omitempty"`
+	Status         string                 `json:"status,omitempty"`
+	WebhookID      *string                `json:"webhook_id,omitempty"`
+
+	// Deprecated: the API reads a single "topic". When Topic is empty, the
+	// first element of Topics is sent as the topic.
+	Topics []string `json:"-"`
+}
+
+// normalized returns a copy of the request with the deprecated Topics field
+// mapped to Topic.
+func (r JobRequest) normalized() JobRequest {
+	if r.Topic == "" && len(r.Topics) > 0 {
+		r.Topic = r.Topics[0]
+	}
+	return r
 }
 
 // JobRun represents a single execution of a job.
@@ -280,11 +312,13 @@ type Pipeline struct {
 }
 
 // PipelineRequest is the request body for creating or updating a pipeline.
+// WebhookID is required when creating a pipeline. Empty fields are not sent,
+// so UpdatePipeline changes only what is set.
 type PipelineRequest struct {
-	Name        string                   `json:"name"`
-	Description string                   `json:"description"`
-	Topics      []string                 `json:"topics"`
-	Steps       []map[string]interface{} `json:"steps"`
+	Name        string                   `json:"name,omitempty"`
+	Description string                   `json:"description,omitempty"`
+	Topics      []string                 `json:"topics,omitempty"`
+	Steps       []map[string]interface{} `json:"steps,omitempty"`
 	WebhookID   *string                  `json:"webhook_id,omitempty"`
 }
 
@@ -292,17 +326,19 @@ type PipelineRequest struct {
 type EventSchema struct {
 	ID         string                 `json:"id"`
 	Topic      string                 `json:"topic"`
-	Version    string                 `json:"version"`
+	Version    int                    `json:"version"`
 	Status     string                 `json:"status"`
 	Schema     map[string]interface{} `json:"schema"`
 	InsertedAt string                 `json:"inserted_at"`
 }
 
 // EventSchemaRequest is the request body for creating or updating an event schema.
+// Empty fields are not sent, so UpdateEventSchema changes only what is set.
 type EventSchemaRequest struct {
-	Topic   string                 `json:"topic"`
-	Version string                 `json:"version"`
-	Schema  map[string]interface{} `json:"schema"`
+	Topic   string                 `json:"topic,omitempty"`
+	Version int                    `json:"version,omitempty"`
+	Schema  map[string]interface{} `json:"schema,omitempty"`
+	Status  string                 `json:"status,omitempty"`
 }
 
 // SandboxEndpoint represents a sandbox testing endpoint.
@@ -372,9 +408,14 @@ type ExportOptions struct {
 
 // Member represents a project team member.
 type Member struct {
-	ID    string `json:"id"`
-	Email string `json:"email"`
-	Role  string `json:"role"`
+	ID         string `json:"id"`
+	ProjectID  string `json:"project_id,omitempty"`
+	UserID     string `json:"user_id,omitempty"`
+	Email      string `json:"email,omitempty"`
+	Role       string `json:"role"`
+	Status     string `json:"status,omitempty"`
+	InvitedBy  string `json:"invited_by,omitempty"`
+	InsertedAt string `json:"inserted_at,omitempty"`
 }
 
 // NotificationChannel represents external notification channel config for a project.
@@ -475,7 +516,7 @@ func (c *Client) SendEvents(ctx context.Context, req BatchRequest) (*BatchResult
 // GetEvent retrieves an event by ID.
 func (c *Client) GetEvent(ctx context.Context, id string) (*Event, error) {
 	var resp Event
-	err := c.doRequest(ctx, http.MethodGet, "/api/v1/events/"+id, nil, &resp)
+	err := c.doRequest(ctx, http.MethodGet, "/api/v1/events/"+pathEscape(id), nil, &resp)
 	return &resp, err
 }
 
@@ -492,7 +533,7 @@ func (c *Client) ListEvents(ctx context.Context, params url.Values) (*PaginatedR
 
 // DeleteEvent deletes an event by ID.
 func (c *Client) DeleteEvent(ctx context.Context, id string) error {
-	return c.doRequest(ctx, http.MethodDelete, "/api/v1/events/"+id, nil, nil)
+	return c.doRequest(ctx, http.MethodDelete, "/api/v1/events/"+pathEscape(id), nil, nil)
 }
 
 // ---------- Webhooks ----------
@@ -516,33 +557,33 @@ func (c *Client) ListWebhooks(ctx context.Context) ([]Webhook, error) {
 // GetWebhook retrieves a webhook by ID.
 func (c *Client) GetWebhook(ctx context.Context, id string) (*Webhook, error) {
 	var resp Webhook
-	err := c.doRequest(ctx, http.MethodGet, "/api/v1/webhooks/"+id, nil, &resp)
+	err := c.doRequest(ctx, http.MethodGet, "/api/v1/webhooks/"+pathEscape(id), nil, &resp)
 	return &resp, err
 }
 
 // UpdateWebhook updates an existing webhook.
 func (c *Client) UpdateWebhook(ctx context.Context, id string, req WebhookRequest) (*Webhook, error) {
 	var resp Webhook
-	err := c.doRequest(ctx, http.MethodPatch, "/api/v1/webhooks/"+id, req, &resp)
+	err := c.doRequest(ctx, http.MethodPatch, "/api/v1/webhooks/"+pathEscape(id), req, &resp)
 	return &resp, err
 }
 
 // DeleteWebhook deletes a webhook by ID.
 func (c *Client) DeleteWebhook(ctx context.Context, id string) error {
-	return c.doRequest(ctx, http.MethodDelete, "/api/v1/webhooks/"+id, nil, nil)
+	return c.doRequest(ctx, http.MethodDelete, "/api/v1/webhooks/"+pathEscape(id), nil, nil)
 }
 
 // WebhookHealth retrieves health status for a specific webhook.
 func (c *Client) WebhookHealth(ctx context.Context, id string) (map[string]interface{}, error) {
 	var resp map[string]interface{}
-	err := c.doRequest(ctx, http.MethodGet, "/api/v1/webhooks/"+id+"/health", nil, &resp)
+	err := c.doRequest(ctx, http.MethodGet, "/api/v1/webhooks/"+pathEscape(id)+"/health", nil, &resp)
 	return resp, err
 }
 
 // TestWebhook sends a test delivery to a webhook.
 func (c *Client) TestWebhook(ctx context.Context, id string) (map[string]interface{}, error) {
 	var resp map[string]interface{}
-	err := c.doRequest(ctx, http.MethodPost, "/api/v1/webhooks/"+id+"/test", nil, &resp)
+	err := c.doRequest(ctx, http.MethodPost, "/api/v1/webhooks/"+pathEscape(id)+"/test", nil, &resp)
 	return resp, err
 }
 
@@ -570,7 +611,7 @@ func (c *Client) ListDeliveries(ctx context.Context, params url.Values) (*Pagina
 
 // RetryDelivery retries a failed delivery.
 func (c *Client) RetryDelivery(ctx context.Context, id string) error {
-	return c.doRequest(ctx, http.MethodPost, "/api/v1/deliveries/"+id+"/retry", nil, nil)
+	return c.doRequest(ctx, http.MethodPost, "/api/v1/deliveries/"+pathEscape(id)+"/retry", nil, nil)
 }
 
 // ---------- Dead Letters ----------
@@ -589,18 +630,18 @@ func (c *Client) ListDeadLetters(ctx context.Context, params url.Values) (*Pagin
 // GetDeadLetter retrieves a dead letter by ID.
 func (c *Client) GetDeadLetter(ctx context.Context, id string) (*DeadLetter, error) {
 	var resp DeadLetter
-	err := c.doRequest(ctx, http.MethodGet, "/api/v1/dead-letters/"+id, nil, &resp)
+	err := c.doRequest(ctx, http.MethodGet, "/api/v1/dead-letters/"+pathEscape(id), nil, &resp)
 	return &resp, err
 }
 
 // RetryDeadLetter retries a dead-lettered event.
 func (c *Client) RetryDeadLetter(ctx context.Context, id string) error {
-	return c.doRequest(ctx, http.MethodPost, "/api/v1/dead-letters/"+id+"/retry", nil, nil)
+	return c.doRequest(ctx, http.MethodPost, "/api/v1/dead-letters/"+pathEscape(id)+"/retry", nil, nil)
 }
 
 // ResolveDeadLetter marks a dead letter as resolved.
 func (c *Client) ResolveDeadLetter(ctx context.Context, id string) error {
-	return c.doRequest(ctx, http.MethodPatch, "/api/v1/dead-letters/"+id+"/resolve", nil, nil)
+	return c.doRequest(ctx, http.MethodPatch, "/api/v1/dead-letters/"+pathEscape(id)+"/resolve", nil, nil)
 }
 
 // ---------- Replays ----------
@@ -626,13 +667,13 @@ func (c *Client) ListReplays(ctx context.Context, params url.Values) (*Paginated
 // GetReplay retrieves a replay by ID.
 func (c *Client) GetReplay(ctx context.Context, id string) (*Replay, error) {
 	var resp Replay
-	err := c.doRequest(ctx, http.MethodGet, "/api/v1/replays/"+id, nil, &resp)
+	err := c.doRequest(ctx, http.MethodGet, "/api/v1/replays/"+pathEscape(id), nil, &resp)
 	return &resp, err
 }
 
 // CancelReplay cancels an in-progress replay.
 func (c *Client) CancelReplay(ctx context.Context, id string) error {
-	return c.doRequest(ctx, http.MethodDelete, "/api/v1/replays/"+id, nil, nil)
+	return c.doRequest(ctx, http.MethodDelete, "/api/v1/replays/"+pathEscape(id), nil, nil)
 }
 
 // ---------- Jobs ----------
@@ -640,7 +681,7 @@ func (c *Client) CancelReplay(ctx context.Context, id string) error {
 // CreateJob creates a new scheduled job.
 func (c *Client) CreateJob(ctx context.Context, req JobRequest) (*Job, error) {
 	var resp Job
-	err := c.doRequest(ctx, http.MethodPost, "/api/v1/jobs", req, &resp)
+	err := c.doRequest(ctx, http.MethodPost, "/api/v1/jobs", req.normalized(), &resp)
 	return &resp, err
 }
 
@@ -658,25 +699,25 @@ func (c *Client) ListJobs(ctx context.Context, params url.Values) (*PaginatedRes
 // GetJob retrieves a job by ID.
 func (c *Client) GetJob(ctx context.Context, id string) (*Job, error) {
 	var resp Job
-	err := c.doRequest(ctx, http.MethodGet, "/api/v1/jobs/"+id, nil, &resp)
+	err := c.doRequest(ctx, http.MethodGet, "/api/v1/jobs/"+pathEscape(id), nil, &resp)
 	return &resp, err
 }
 
 // UpdateJob updates an existing job.
 func (c *Client) UpdateJob(ctx context.Context, id string, req JobRequest) (*Job, error) {
 	var resp Job
-	err := c.doRequest(ctx, http.MethodPatch, "/api/v1/jobs/"+id, req, &resp)
+	err := c.doRequest(ctx, http.MethodPatch, "/api/v1/jobs/"+pathEscape(id), req.normalized(), &resp)
 	return &resp, err
 }
 
 // DeleteJob deletes a job by ID.
 func (c *Client) DeleteJob(ctx context.Context, id string) error {
-	return c.doRequest(ctx, http.MethodDelete, "/api/v1/jobs/"+id, nil, nil)
+	return c.doRequest(ctx, http.MethodDelete, "/api/v1/jobs/"+pathEscape(id), nil, nil)
 }
 
 // ListJobRuns lists runs for a specific job.
 func (c *Client) ListJobRuns(ctx context.Context, jobID string, params url.Values) (*PaginatedResponse[JobRun], error) {
-	path := "/api/v1/jobs/" + jobID + "/runs"
+	path := "/api/v1/jobs/" + pathEscape(jobID) + "/runs"
 	if len(params) > 0 {
 		path += "?" + params.Encode()
 	}
@@ -699,9 +740,9 @@ func (c *Client) CronPreview(ctx context.Context, expression string) ([]string, 
 
 // CreatePipeline creates a new event processing pipeline.
 func (c *Client) CreatePipeline(ctx context.Context, req PipelineRequest) (*Pipeline, error) {
-	var resp Pipeline
+	var resp dataEnvelope[Pipeline]
 	err := c.doRequest(ctx, http.MethodPost, "/api/v1/pipelines", req, &resp)
-	return &resp, err
+	return &resp.Data, err
 }
 
 // ListPipelines lists pipelines with optional query parameters.
@@ -717,27 +758,28 @@ func (c *Client) ListPipelines(ctx context.Context, params url.Values) (*Paginat
 
 // GetPipeline retrieves a pipeline by ID.
 func (c *Client) GetPipeline(ctx context.Context, id string) (*Pipeline, error) {
-	var resp Pipeline
-	err := c.doRequest(ctx, http.MethodGet, "/api/v1/pipelines/"+id, nil, &resp)
-	return &resp, err
+	var resp dataEnvelope[Pipeline]
+	err := c.doRequest(ctx, http.MethodGet, "/api/v1/pipelines/"+pathEscape(id), nil, &resp)
+	return &resp.Data, err
 }
 
 // UpdatePipeline updates an existing pipeline.
 func (c *Client) UpdatePipeline(ctx context.Context, id string, req PipelineRequest) (*Pipeline, error) {
-	var resp Pipeline
-	err := c.doRequest(ctx, http.MethodPatch, "/api/v1/pipelines/"+id, req, &resp)
-	return &resp, err
+	var resp dataEnvelope[Pipeline]
+	err := c.doRequest(ctx, http.MethodPatch, "/api/v1/pipelines/"+pathEscape(id), req, &resp)
+	return &resp.Data, err
 }
 
 // DeletePipeline deletes a pipeline by ID.
 func (c *Client) DeletePipeline(ctx context.Context, id string) error {
-	return c.doRequest(ctx, http.MethodDelete, "/api/v1/pipelines/"+id, nil, nil)
+	return c.doRequest(ctx, http.MethodDelete, "/api/v1/pipelines/"+pathEscape(id), nil, nil)
 }
 
 // TestPipeline sends a test payload through a pipeline to preview results.
 func (c *Client) TestPipeline(ctx context.Context, id string, payload map[string]interface{}) (map[string]interface{}, error) {
+	body := map[string]interface{}{"payload": payload}
 	var resp map[string]interface{}
-	err := c.doRequest(ctx, http.MethodPost, "/api/v1/pipelines/"+id+"/test", payload, &resp)
+	err := c.doRequest(ctx, http.MethodPost, "/api/v1/pipelines/"+pathEscape(id)+"/test", body, &resp)
 	return resp, err
 }
 
@@ -745,9 +787,9 @@ func (c *Client) TestPipeline(ctx context.Context, id string, payload map[string
 
 // CreateEventSchema creates a new event schema.
 func (c *Client) CreateEventSchema(ctx context.Context, req EventSchemaRequest) (*EventSchema, error) {
-	var resp EventSchema
+	var resp dataEnvelope[EventSchema]
 	err := c.doRequest(ctx, http.MethodPost, "/api/v1/event-schemas", req, &resp)
-	return &resp, err
+	return &resp.Data, err
 }
 
 // ListEventSchemas lists event schemas with optional query parameters.
@@ -763,21 +805,21 @@ func (c *Client) ListEventSchemas(ctx context.Context, params url.Values) (*Pagi
 
 // GetEventSchema retrieves an event schema by ID.
 func (c *Client) GetEventSchema(ctx context.Context, id string) (*EventSchema, error) {
-	var resp EventSchema
-	err := c.doRequest(ctx, http.MethodGet, "/api/v1/event-schemas/"+id, nil, &resp)
-	return &resp, err
+	var resp dataEnvelope[EventSchema]
+	err := c.doRequest(ctx, http.MethodGet, "/api/v1/event-schemas/"+pathEscape(id), nil, &resp)
+	return &resp.Data, err
 }
 
 // UpdateEventSchema updates an existing event schema.
 func (c *Client) UpdateEventSchema(ctx context.Context, id string, req EventSchemaRequest) (*EventSchema, error) {
-	var resp EventSchema
-	err := c.doRequest(ctx, http.MethodPatch, "/api/v1/event-schemas/"+id, req, &resp)
-	return &resp, err
+	var resp dataEnvelope[EventSchema]
+	err := c.doRequest(ctx, http.MethodPatch, "/api/v1/event-schemas/"+pathEscape(id), req, &resp)
+	return &resp.Data, err
 }
 
 // DeleteEventSchema deletes an event schema by ID.
 func (c *Client) DeleteEventSchema(ctx context.Context, id string) error {
-	return c.doRequest(ctx, http.MethodDelete, "/api/v1/event-schemas/"+id, nil, nil)
+	return c.doRequest(ctx, http.MethodDelete, "/api/v1/event-schemas/"+pathEscape(id), nil, nil)
 }
 
 // ValidatePayload validates a payload against the schema for a given topic.
@@ -812,12 +854,12 @@ func (c *Client) CreateSandboxEndpoint(ctx context.Context, name string) (*Sandb
 
 // DeleteSandboxEndpoint deletes a sandbox endpoint by ID.
 func (c *Client) DeleteSandboxEndpoint(ctx context.Context, id string) error {
-	return c.doRequest(ctx, http.MethodDelete, "/api/v1/sandbox-endpoints/"+id, nil, nil)
+	return c.doRequest(ctx, http.MethodDelete, "/api/v1/sandbox-endpoints/"+pathEscape(id), nil, nil)
 }
 
 // ListSandboxRequests lists captured requests for a sandbox endpoint.
 func (c *Client) ListSandboxRequests(ctx context.Context, endpointID string, params url.Values) (*PaginatedResponse[SandboxRequest], error) {
-	path := "/api/v1/sandbox-endpoints/" + endpointID + "/requests"
+	path := "/api/v1/sandbox-endpoints/" + pathEscape(endpointID) + "/requests"
 	if len(params) > 0 {
 		path += "?" + params.Encode()
 	}
@@ -882,37 +924,37 @@ func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
 // CreateProject creates a new project.
 // Requires Bearer token auth (SetAuthToken).
 func (c *Client) CreateProject(ctx context.Context, req ProjectRequest) (*Project, error) {
-	var resp Project
+	var resp dataEnvelope[Project]
 	err := c.doAuthenticatedRequest(ctx, http.MethodPost, "/api/v1/projects", req, &resp)
-	return &resp, err
+	return &resp.Data, err
 }
 
 // GetProjectByID retrieves a project by ID.
 // Requires Bearer token auth (SetAuthToken).
 func (c *Client) GetProjectByID(ctx context.Context, id string) (*Project, error) {
-	var resp Project
-	err := c.doAuthenticatedRequest(ctx, http.MethodGet, "/api/v1/projects/"+id, nil, &resp)
-	return &resp, err
+	var resp dataEnvelope[Project]
+	err := c.doAuthenticatedRequest(ctx, http.MethodGet, "/api/v1/projects/"+pathEscape(id), nil, &resp)
+	return &resp.Data, err
 }
 
 // UpdateProjectByID updates an existing project.
 // Requires Bearer token auth (SetAuthToken).
 func (c *Client) UpdateProjectByID(ctx context.Context, id string, req ProjectRequest) (*Project, error) {
-	var resp Project
-	err := c.doAuthenticatedRequest(ctx, http.MethodPatch, "/api/v1/projects/"+id, req, &resp)
-	return &resp, err
+	var resp dataEnvelope[Project]
+	err := c.doAuthenticatedRequest(ctx, http.MethodPatch, "/api/v1/projects/"+pathEscape(id), req, &resp)
+	return &resp.Data, err
 }
 
 // DeleteProject deletes a project by ID.
 // Requires Bearer token auth (SetAuthToken).
 func (c *Client) DeleteProject(ctx context.Context, id string) error {
-	return c.doAuthenticatedRequest(ctx, http.MethodDelete, "/api/v1/projects/"+id, nil, nil)
+	return c.doAuthenticatedRequest(ctx, http.MethodDelete, "/api/v1/projects/"+pathEscape(id), nil, nil)
 }
 
 // SetDefaultProject sets a project as the default.
 // Requires Bearer token auth (SetAuthToken).
 func (c *Client) SetDefaultProject(ctx context.Context, id string) error {
-	return c.doAuthenticatedRequest(ctx, http.MethodPatch, "/api/v1/projects/"+id+"/default", nil, nil)
+	return c.doAuthenticatedRequest(ctx, http.MethodPatch, "/api/v1/projects/"+pathEscape(id)+"/default", nil, nil)
 }
 
 // ---------- Teams (requires Bearer token) ----------
@@ -923,32 +965,36 @@ func (c *Client) ListMembers(ctx context.Context, projectID string) ([]Member, e
 	var resp struct {
 		Data []Member `json:"data"`
 	}
-	err := c.doAuthenticatedRequest(ctx, http.MethodGet, "/api/v1/projects/"+projectID+"/members", nil, &resp)
+	err := c.doAuthenticatedRequest(ctx, http.MethodGet, "/api/v1/projects/"+pathEscape(projectID)+"/members", nil, &resp)
 	return resp.Data, err
 }
 
-// AddMember adds a team member to a project.
+// AddMember adds a team member to a project. The role is "viewer", "editor"
+// or "admin"; an empty role means "viewer".
 // Requires Bearer token auth (SetAuthToken).
 func (c *Client) AddMember(ctx context.Context, projectID, email, role string) (*Member, error) {
+	if role == "" {
+		role = "viewer"
+	}
 	body := map[string]string{"email": email, "role": role}
-	var resp Member
-	err := c.doAuthenticatedRequest(ctx, http.MethodPost, "/api/v1/projects/"+projectID+"/members", body, &resp)
-	return &resp, err
+	var resp dataEnvelope[Member]
+	err := c.doAuthenticatedRequest(ctx, http.MethodPost, "/api/v1/projects/"+pathEscape(projectID)+"/members", body, &resp)
+	return &resp.Data, err
 }
 
 // UpdateMember updates a team member's role.
 // Requires Bearer token auth (SetAuthToken).
 func (c *Client) UpdateMember(ctx context.Context, projectID, memberID, role string) (*Member, error) {
 	body := map[string]string{"role": role}
-	var resp Member
-	err := c.doAuthenticatedRequest(ctx, http.MethodPatch, "/api/v1/projects/"+projectID+"/members/"+memberID, body, &resp)
-	return &resp, err
+	var resp dataEnvelope[Member]
+	err := c.doAuthenticatedRequest(ctx, http.MethodPatch, "/api/v1/projects/"+pathEscape(projectID)+"/members/"+pathEscape(memberID), body, &resp)
+	return &resp.Data, err
 }
 
 // RemoveMember removes a team member from a project.
 // Requires Bearer token auth (SetAuthToken).
 func (c *Client) RemoveMember(ctx context.Context, projectID, memberID string) error {
-	return c.doAuthenticatedRequest(ctx, http.MethodDelete, "/api/v1/projects/"+projectID+"/members/"+memberID, nil, nil)
+	return c.doAuthenticatedRequest(ctx, http.MethodDelete, "/api/v1/projects/"+pathEscape(projectID)+"/members/"+pathEscape(memberID), nil, nil)
 }
 
 // ---------- Audit ----------
@@ -1044,7 +1090,7 @@ func (c *Client) GetConsents(ctx context.Context) ([]Consent, error) {
 // AcceptConsent accepts a specific consent purpose.
 // Requires Bearer token auth (SetAuthToken).
 func (c *Client) AcceptConsent(ctx context.Context, purpose string) error {
-	return c.doAuthenticatedRequest(ctx, http.MethodPost, "/api/v1/me/consents/"+purpose+"/accept", nil, nil)
+	return c.doAuthenticatedRequest(ctx, http.MethodPost, "/api/v1/me/consents/"+pathEscape(purpose)+"/accept", nil, nil)
 }
 
 // ExportMyData exports the current user's personal data (GDPR right of access).
@@ -1056,9 +1102,11 @@ func (c *Client) ExportMyData(ctx context.Context) (map[string]interface{}, erro
 }
 
 // RestrictProcessing requests restriction of processing (GDPR Article 18).
+// The API asks for the account password to confirm the request.
 // Requires Bearer token auth (SetAuthToken).
-func (c *Client) RestrictProcessing(ctx context.Context) error {
-	return c.doAuthenticatedRequest(ctx, http.MethodPost, "/api/v1/me/restrict", nil, nil)
+func (c *Client) RestrictProcessing(ctx context.Context, password string) error {
+	body := map[string]string{"password": password}
+	return c.doAuthenticatedRequest(ctx, http.MethodPost, "/api/v1/me/restrict", body, nil)
 }
 
 // LiftRestriction lifts a previously requested processing restriction.
@@ -1147,13 +1195,13 @@ func (c *Client) ListPendingInvitations(ctx context.Context) ([]Invitation, erro
 // AcceptInvitation accepts a project invitation.
 // Requires Bearer token auth (SetAuthToken).
 func (c *Client) AcceptInvitation(ctx context.Context, id string) error {
-	return c.doAuthenticatedRequest(ctx, http.MethodPost, "/api/v1/invitations/"+id+"/accept", nil, nil)
+	return c.doAuthenticatedRequest(ctx, http.MethodPost, "/api/v1/invitations/"+pathEscape(id)+"/accept", nil, nil)
 }
 
 // RejectInvitation rejects a project invitation.
 // Requires Bearer token auth (SetAuthToken).
 func (c *Client) RejectInvitation(ctx context.Context, id string) error {
-	return c.doAuthenticatedRequest(ctx, http.MethodPost, "/api/v1/invitations/"+id+"/reject", nil, nil)
+	return c.doAuthenticatedRequest(ctx, http.MethodPost, "/api/v1/invitations/"+pathEscape(id)+"/reject", nil, nil)
 }
 
 // ---------- Auth ----------
@@ -1211,24 +1259,24 @@ func (c *Client) CreateEmbedToken(ctx context.Context, config map[string]interfa
 
 // RevokeEmbedToken revokes an embed token by ID.
 func (c *Client) RevokeEmbedToken(ctx context.Context, id string) error {
-	return c.doRequest(ctx, http.MethodDelete, "/api/v1/embed/tokens/"+id, nil, nil)
+	return c.doRequest(ctx, http.MethodDelete, "/api/v1/embed/tokens/"+pathEscape(id), nil, nil)
 }
 
 // ---------- Retention & Purge ----------
 
 // RetentionPolicy represents the data retention policy.
 type RetentionPolicy struct {
-	EventsDays    int `json:"events_days,omitempty"`
+	EventsDays     int `json:"events_days,omitempty"`
 	DeliveriesDays int `json:"deliveries_days,omitempty"`
-	AuditLogsDays int `json:"audit_logs_days,omitempty"`
+	AuditLogsDays  int `json:"audit_logs_days,omitempty"`
 }
 
 // PurgeRequest represents the parameters for a purge operation.
 type PurgeRequest struct {
-	Type     string `json:"type"`
+	Type      string `json:"type"`
 	OlderThan string `json:"older_than,omitempty"`
-	Topic    string `json:"topic,omitempty"`
-	Status   string `json:"status,omitempty"`
+	Topic     string `json:"topic,omitempty"`
+	Status    string `json:"status,omitempty"`
 }
 
 // GetRetentionPolicy retrieves the current retention policy.
@@ -1240,8 +1288,9 @@ func (c *Client) GetRetentionPolicy(ctx context.Context) (map[string]interface{}
 
 // UpdateRetentionPolicy updates the retention policy.
 func (c *Client) UpdateRetentionPolicy(ctx context.Context, policy RetentionPolicy) (map[string]interface{}, error) {
+	body := map[string]interface{}{"retention_policy": policy}
 	var resp map[string]interface{}
-	err := c.doRequest(ctx, http.MethodPatch, "/api/v1/retention", policy, &resp)
+	err := c.doRequest(ctx, http.MethodPatch, "/api/v1/retention", body, &resp)
 	return resp, err
 }
 
@@ -1300,6 +1349,16 @@ func VerifyWebhookSignature(secret, body, signature string) bool {
 }
 
 // ---------- Internal ----------
+
+// dataEnvelope is the {"data": ...} wrapper some endpoints return.
+type dataEnvelope[T any] struct {
+	Data T `json:"data"`
+}
+
+// pathEscape escapes a value for use as one path segment.
+func pathEscape(s string) string {
+	return url.PathEscape(s)
+}
 
 func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}, result interface{}) error {
 	return c.doRequestWithAuth(ctx, method, path, body, result, "apikey")
